@@ -10,6 +10,9 @@ from collections import deque
 import cv2 as cv
 import numpy as np
 import mediapipe as mp
+from mediapipe.tasks.python import vision
+from mediapipe.tasks.python.vision import HandLandmarkerOptions
+from mediapipe.tasks.python import BaseOptions
 
 from utils import CvFpsCalc
 from model import KeyPointClassifier
@@ -58,13 +61,14 @@ def main():
     cap.set(cv.CAP_PROP_FRAME_HEIGHT, cap_height)
 
     # モデルロード #############################################################
-    mp_hands = mp.solutions.hands
-    hands = mp_hands.Hands(
-        static_image_mode=use_static_image_mode,
-        max_num_hands=1,
-        min_detection_confidence=min_detection_confidence,
+    options = HandLandmarkerOptions(
+        base_options=BaseOptions(model_asset_path='model/hand_landmarker.task'),
+        running_mode=vision.RunningMode.VIDEO,
+        num_hands=1,
+        min_hand_detection_confidence=min_detection_confidence,
         min_tracking_confidence=min_tracking_confidence,
     )
+    hand_landmarker = vision.HandLandmarker.create_from_options(options)
 
     keypoint_classifier = KeyPointClassifier()
 
@@ -97,6 +101,7 @@ def main():
 
     #  ########################################################################
     mode = 0
+    frame_counter = 0
 
     while True:
         fps = cvFpsCalc.get()
@@ -115,16 +120,17 @@ def main():
         debug_image = copy.deepcopy(image)
 
         # 検出実施 #############################################################
-        image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
-
-        image.flags.writeable = False
-        results = hands.process(image)
-        image.flags.writeable = True
+        image_rgb = cv.cvtColor(image, cv.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
+        
+        frame_counter += 1
+        timestamp_ms = int(frame_counter * (1000 / 30))  # Assume 30 FPS
+        results = hand_landmarker.detect_for_video(mp_image, timestamp_ms)
 
         #  ####################################################################
-        if results.multi_hand_landmarks is not None:
-            for hand_landmarks, handedness in zip(results.multi_hand_landmarks,
-                                                  results.multi_handedness):
+        if results.hand_landmarks:
+            for hand_landmarks, handedness in zip(results.hand_landmarks,
+                                                  results.handedness):
                 # 外接矩形の計算
                 brect = calc_bounding_rect(debug_image, hand_landmarks)
                 # ランドマークの計算
@@ -199,7 +205,7 @@ def calc_bounding_rect(image, landmarks):
 
     landmark_array = np.empty((0, 2), int)
 
-    for _, landmark in enumerate(landmarks.landmark):
+    for landmark in landmarks:
         landmark_x = min(int(landmark.x * image_width), image_width - 1)
         landmark_y = min(int(landmark.y * image_height), image_height - 1)
 
@@ -218,7 +224,7 @@ def calc_landmark_list(image, landmarks):
     landmark_point = []
 
     # キーポイント
-    for _, landmark in enumerate(landmarks.landmark):
+    for landmark in landmarks:
         landmark_x = min(int(landmark.x * image_width), image_width - 1)
         landmark_y = min(int(landmark.y * image_height), image_height - 1)
         # landmark_z = landmark.z
@@ -497,7 +503,7 @@ def draw_info_text(image, brect, handedness, hand_sign_text,
     cv.rectangle(image, (brect[0], brect[1]), (brect[2], brect[1] - 22),
                  (0, 0, 0), -1)
 
-    info_text = handedness.classification[0].label[0:]
+    info_text = handedness[0].category_name
     if hand_sign_text != "":
         info_text = info_text + ':' + hand_sign_text
     cv.putText(image, info_text, (brect[0] + 5, brect[1] - 4),
