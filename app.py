@@ -62,9 +62,12 @@ def main():
 
     # モデルロード #############################################################
     options = HandLandmarkerOptions(
-        base_options=BaseOptions(model_asset_path='model/hand_landmarker.task'),
+        base_options=BaseOptions(
+            model_asset_path='model/hand_landmarker.task',
+            delegate=BaseOptions.Delegate.CPU
+        ),
         running_mode=vision.RunningMode.VIDEO,
-        num_hands=1,
+        num_hands=2,
         min_hand_detection_confidence=min_detection_confidence,
         min_tracking_confidence=min_tracking_confidence,
     )
@@ -167,6 +170,7 @@ def main():
                 # 描画
                 debug_image = draw_bounding_rect(use_brect, debug_image, brect)
                 debug_image = draw_landmarks(debug_image, landmark_list)
+                debug_image = draw_pointing_cone(debug_image, landmark_list, hand_sign_id == 2)
                 debug_image = draw_info_text(
                     debug_image,
                     brect,
@@ -516,6 +520,62 @@ def draw_info_text(image, brect, handedness, hand_sign_text,
                    cv.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2,
                    cv.LINE_AA)
 
+    return image
+
+
+def draw_pointing_cone(image, landmark_list, is_pointing):
+    if not is_pointing or len(landmark_list) < 9:
+        return image
+    
+    # Get key landmarks for direction calculation
+    index_tip = np.array(landmark_list[8])  # Index finger tip
+    index_dip = np.array(landmark_list[7])  # Index finger DIP joint
+    index_pip = np.array(landmark_list[6])  # Index finger PIP joint
+    
+    # Calculate pointing direction using multiple points for better accuracy
+    direction = index_tip - index_pip
+    direction_length = np.linalg.norm(direction)
+    
+    if direction_length < 1:
+        return image
+    
+    # Normalize direction vector
+    direction = direction / direction_length
+    
+    # Cone parameters
+    cone_length = 300  # Length of cone in pixels
+    half_angle = 15  # Half angle in degrees (total 30 degrees)
+    
+    # Calculate the end point of the cone center line
+    cone_end = index_tip + direction * cone_length
+    
+    # Calculate perpendicular vector for cone width
+    perpendicular = np.array([-direction[1], direction[0]])
+    
+    # Calculate cone width at the end
+    cone_width = cone_length * np.tan(np.radians(half_angle))
+    
+    # Calculate the three points of the triangle
+    tip_point = tuple(index_tip.astype(int))
+    left_point = tuple((cone_end + perpendicular * cone_width).astype(int))
+    right_point = tuple((cone_end - perpendicular * cone_width).astype(int))
+    
+    # Draw the cone as a semi-transparent triangle
+    overlay = image.copy()
+    triangle_points = np.array([tip_point, left_point, right_point], np.int32)
+    cv.fillPoly(overlay, [triangle_points], (0, 255, 255))  # Yellow cone
+    
+    # Blend the overlay with the original image
+    cv.addWeighted(overlay, 0.3, image, 0.7, 0, image)
+    
+    # Draw cone outline
+    cv.line(image, tip_point, left_point, (0, 200, 200), 2)
+    cv.line(image, tip_point, right_point, (0, 200, 200), 2)
+    cv.line(image, left_point, right_point, (0, 200, 200), 2)
+    
+    # Draw center line
+    cv.line(image, tip_point, tuple(cone_end.astype(int)), (0, 255, 255), 1)
+    
     return image
 
 
